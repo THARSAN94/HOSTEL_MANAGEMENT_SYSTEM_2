@@ -14,7 +14,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const DB_FILE = path.join(process.cwd(), 'vsb_hostel_db.json');
 
 // Middleware for body parsing with large limit for profile picture base64 transfers
