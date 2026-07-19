@@ -1,0 +1,6 @@
+{
+  "name": "VSB Boys Hostel 2 Management System",
+  "description": "Premium full-stack hostel management application for VSB Engineering College Boys Hostel 2, featuring a futuristic cyberpunk dark theme, role-based dashboards, automated requests, and a Gemini-powered AI Assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
