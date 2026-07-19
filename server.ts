@@ -697,19 +697,35 @@ Do NOT output code blocks or JSON unless asked. Speak elegantly.
 
 // Start server initialization with Vite middleware
 async function startServer() {
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
+  const distPath = path.join(process.cwd(), 'dist');
+  const isProduction = process.env.NODE_ENV === 'production' || fs.existsSync(path.join(distPath, 'index.html'));
+
+  if (isProduction) {
+    // Production: serve pre-built static files
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+    console.log('Running in PRODUCTION mode, serving static files from dist/');
+  } else {
+    // Development: use Vite dev server middleware
+    try {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+      console.log('Running in DEVELOPMENT mode with Vite middleware');
+    } catch (err) {
+      console.error('Failed to start Vite dev server:', err);
+      // Fallback: try serving dist if it exists
+      if (fs.existsSync(path.join(distPath, 'index.html'))) {
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+      }
+    }
   }
 
   // Pre-load DB on boot
