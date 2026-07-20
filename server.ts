@@ -10,27 +10,19 @@ import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { readDB, writeDB, initDB, DBState } from './src/db';
 
 dotenv.config();
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const DB_FILE = path.join(process.cwd(), 'vsb_hostel_db.json');
 
 // Middleware for body parsing with large limit for profile picture base64 transfers
 app.use(express.json({ limit: '12mb' }));
 
 // ----------------------------------------------------
-// DATABASE SYSTEM (JSON flat-file persistence)
+// DATABASE SYSTEM (PostgreSQL with local JSON fallback)
 // ----------------------------------------------------
-interface DBState {
-  users: any[];
-  requests: any[];
-  announcements: any[];
-  messMenu: any[];
-  rooms: any[];
-  otps: Record<string, { otp: string; expires: number }>;
-}
 
 const SALT_KEY = 'vsb_hostel_master_salt_2026';
 
@@ -57,42 +49,6 @@ function verifyJWT(token: string): any | null {
   }
 }
 
-// Initial/Seed Data for VSB Boys Hostel 2
-const defaultRooms: any[] = [];
-for (let i = 1; i <= 100; i++) {
-  let block = '';
-  if (i <= 25) block = 'Block A';
-  else if (i <= 50) block = 'Block B';
-  else if (i <= 75) block = 'Block C';
-  else block = 'Block D';
-
-  defaultRooms.push({
-    id: `room-${i}`,
-    block,
-    roomNo: i.toString(),
-    capacity: 4,
-    occupied: 0,
-    status: 'Available'
-  });
-}
-
-const defaultMessMenu = [
-  { day: 'Monday', breakfast: 'Ghee Podi Idli, Sambar, Coconut Chutney, Tea/Coffee', lunch: 'Rich Veg Biryani, Onion Raitha, Paneer Gravy, Curd Rice', snacks: 'Hot Onion Pakoda, Ginger Tea', dinner: 'Butter Chapathi, Chenna Masala, Hot Milk' },
-  { day: 'Tuesday', breakfast: 'Crispy Poori, Potato Masala, Vadacurry, Coffee', lunch: 'Sambar Rice, Potato Fry, Appalam, Elaneer Payasam', snacks: 'Sweet Kozhukattai, Tea', dinner: 'Kalyana Veg Kurma, Parotta, Warm Milk' },
-  { day: 'Wednesday', breakfast: 'Rava Upma, Coconut & Tomato Chutney, Tea', lunch: 'Kara Kuzhambu, Beetroot Poriyal, Curd, Rice', snacks: 'Samosa, Cardamom Tea', dinner: 'Jeera Rice, Dal Makhani, Fresh Fruits' },
-  { day: 'Thursday', breakfast: 'Kambarasam Pongal, Medu Vada, Sambar, Coffee', lunch: 'Thali Meals, Veg Poriyal, Rasam, Butter Milk', snacks: 'Kala Chana Sundal, Tea', dinner: 'Idiyappam, Coconut Milk, Kadala Curry' },
-  { day: 'Friday', breakfast: 'Onion Uttapam, Mint Chutney, Sambar, Tea', lunch: 'Lemon Rice, Potato Masala, Curd Rice, Pickles', snacks: 'Banana Fritters, Coffee', dinner: 'Wheat Chapathi, Mixed Veg Gravy, Milk' },
-  { day: 'Saturday', breakfast: 'Semiya Upma, Tomato Chutney, Tea', lunch: 'Bisi Bele Bath, Potato Chips, Curd, Fruit Salad', snacks: 'Parippu Vada, Black Tea', dinner: 'Aloo Paratha, Curd, Pickles, Warm Milk' },
-  { day: 'Sunday', breakfast: 'Special Masala Dosa, Sambar, Chutney, Coffee', lunch: 'Chief Chef Biryani, Veg Gravy, Sweet Kesari', snacks: 'Mixed Veg Cutlet, Tea', dinner: 'Phulka, Kadai Paneer, Hot Milk' },
-];
-
-const defaultAnnouncements = [
-  { id: 'ann-1', title: 'Curfew Protocol Warning', content: 'Curfew lockdown commences strictly at 21:00 hours. High-priority scans will flag unauthorized outer movements.', date: new Date().toISOString(), priority: 'High' },
-  { id: 'ann-2', title: 'Warden Room Registry Audits', content: 'Chief Warden Muthusamy will hold visual matrix reviews of Sector Block A rooms this Saturday.', date: new Date().toISOString(), priority: 'Normal' },
-];
-
-const defaultRequests: any[] = [];
-
 function syncRoomOccupancies(db: DBState) {
   db.rooms = db.rooms.map((room: any) => {
     const occupiedCount = db.users.filter(
@@ -107,41 +63,13 @@ function syncRoomOccupancies(db: DBState) {
         status = 'Available';
       }
     }
-    
+
     return {
       ...room,
       occupied: occupiedCount,
       status
     };
   });
-}
-
-function readDB(): DBState {
-  if (!fs.existsSync(DB_FILE)) {
-    const state: DBState = {
-      users: [],
-      requests: defaultRequests,
-      announcements: defaultAnnouncements,
-      messMenu: defaultMessMenu,
-      rooms: defaultRooms,
-      otps: {}
-    };
-
-    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
-    return state;
-  }
-
-  try {
-    const raw = fs.readFileSync(DB_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    // Fallback if corrupt
-    return { users: [], requests: [], announcements: [], messMenu: [], rooms: [], otps: {} };
-  }
-}
-
-function writeDB(state: DBState) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
 }
 
 // ----------------------------------------------------
@@ -186,11 +114,11 @@ function authenticate(req: any, res: any, next: any) {
 // ----------------------------------------------------
 
 // 1. Auth: Register
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   const { role, email, password, name, phone, address, hostelBlock, roomNo, regNo, department, year, wardenPasscode } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
 
-  const db = readDB();
+  const db = await readDB();
 
   // Check unique email
   if (db.users.some(u => String(u.email || '').trim().toLowerCase() === normalizedEmail)) {
@@ -224,7 +152,7 @@ app.post('/api/auth/register', (req, res) => {
 
   db.users.push(newUser);
   syncRoomOccupancies(db);
-  writeDB(db);
+  await writeDB(db);
 
   // Send Simulated Account Verification Email
   sendSimulatedEmail(
@@ -239,10 +167,10 @@ Your account is pending verify protocols. You can now login to your Cabin.`
 });
 
 // 2. Auth: Login
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password, role } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
-  const db = readDB();
+  const db = await readDB();
 
   // Find if user exists at all with this email
   const existingUserAnyRole = db.users.find(u => String(u.email || '').trim().toLowerCase() === normalizedEmail);
@@ -277,10 +205,10 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // 3. Auth: Forgot Password OTP
-app.post('/api/auth/forgot-password', (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
-  const db = readDB();
+  const db = await readDB();
 
   const user = db.users.find(u => String(u.email || '').trim().toLowerCase() === normalizedEmail);
   if (!user) {
@@ -293,7 +221,7 @@ app.post('/api/auth/forgot-password', (req, res) => {
     otp,
     expires: Date.now() + 10 * 60 * 1000 // 10 minutes
   };
-  writeDB(db);
+  await writeDB(db);
 
   sendSimulatedEmail(
     normalizedEmail,
@@ -308,10 +236,10 @@ This sequence expires in 10 minutes.`
 });
 
 // 4. Auth: Reset Password via OTP
-app.post('/api/auth/reset-password', (req, res) => {
+app.post('/api/auth/reset-password', async (req, res) => {
   const { email, otp, newPassword } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
-  const db = readDB();
+  const db = await readDB();
 
   const otpRecord = db.otps[normalizedEmail];
   if (!otpRecord || otpRecord.otp !== otp || otpRecord.expires < Date.now()) {
@@ -325,7 +253,7 @@ app.post('/api/auth/reset-password', (req, res) => {
 
   user.password = hashPassword(newPassword);
   delete db.otps[normalizedEmail];
-  writeDB(db);
+  await writeDB(db);
 
   sendSimulatedEmail(
     normalizedEmail,
@@ -338,8 +266,8 @@ If you did not execute this change, please report immediately to Chief Warden Mu
 });
 
 // 5. Auth: Get current user
-app.get('/api/auth/me', authenticate, (req: any, res) => {
-  const db = readDB();
+app.get('/api/auth/me', authenticate, async (req: any, res) => {
+  const db = await readDB();
   const user = db.users.find(u => u.id === req.userPayload.id);
   if (!user) {
     return res.status(404).json({ error: 'User session not found.' });
@@ -350,9 +278,9 @@ app.get('/api/auth/me', authenticate, (req: any, res) => {
 });
 
 // 6. Auth: Patch Profile
-app.patch('/api/auth/profile', authenticate, (req: any, res) => {
+app.patch('/api/auth/profile', authenticate, async (req: any, res) => {
   const { phone, address, profilePic } = req.body;
-  const db = readDB();
+  const db = await readDB();
 
   const userIndex = db.users.findIndex(u => u.id === req.userPayload.id);
   if (userIndex === -1) {
@@ -364,17 +292,17 @@ app.patch('/api/auth/profile', authenticate, (req: any, res) => {
   if (address) user.address = address;
   if (profilePic !== undefined) user.profilePic = profilePic;
 
-  writeDB(db);
+  await writeDB(db);
 
   const { password: _, ...safeUser } = user;
   res.json({ user: safeUser });
 });
 
 // 7. Get Dashboard initial sync coordinates
-app.get('/api/data/dashboard', authenticate, (req: any, res) => {
-  const db = readDB();
+app.get('/api/data/dashboard', authenticate, async (req: any, res) => {
+  const db = await readDB();
   syncRoomOccupancies(db);
-  writeDB(db);
+  await writeDB(db);
   const { role, id } = req.userPayload;
 
   const response: any = {
@@ -400,9 +328,9 @@ app.get('/api/data/dashboard', authenticate, (req: any, res) => {
 });
 
 // 8. Requests: File new request
-app.post('/api/requests', authenticate, (req: any, res) => {
+app.post('/api/requests', authenticate, async (req: any, res) => {
   const { type, title, description, priority } = req.body;
-  const db = readDB();
+  const db = await readDB();
   const student = db.users.find(u => u.id === req.userPayload.id);
 
   if (!student) {
@@ -427,7 +355,7 @@ app.post('/api/requests', authenticate, (req: any, res) => {
   };
 
   db.requests.push(newRequest);
-  writeDB(db);
+  await writeDB(db);
 
   // Email alerting
   sendSimulatedEmail(
@@ -440,14 +368,14 @@ app.post('/api/requests', authenticate, (req: any, res) => {
 });
 
 // 9. Requests: Update Status (Warden only)
-app.patch('/api/requests/:id', authenticate, (req: any, res) => {
+app.patch('/api/requests/:id', authenticate, async (req: any, res) => {
   if (req.userPayload.role !== 'warden') {
     return res.status(403).json({ error: 'Permission denied.' });
   }
 
   const { id } = req.params;
   const { status, remarks } = req.body;
-  const db = readDB();
+  const db = await readDB();
 
   const reqIndex = db.requests.findIndex(r => r.id === id);
   if (reqIndex === -1) {
@@ -458,7 +386,7 @@ app.patch('/api/requests/:id', authenticate, (req: any, res) => {
   request.status = status;
   if (remarks !== undefined) request.remarks = remarks;
 
-  writeDB(db);
+  await writeDB(db);
 
   // Find student and email them
   const student = db.users.find(u => u.id === request.studentId);
@@ -474,13 +402,13 @@ app.patch('/api/requests/:id', authenticate, (req: any, res) => {
 });
 
 // 10. Announcements: Create (Warden only)
-app.post('/api/announcements', authenticate, (req: any, res) => {
+app.post('/api/announcements', authenticate, async (req: any, res) => {
   if (req.userPayload.role !== 'warden') {
     return res.status(403).json({ error: 'Permission denied.' });
   }
 
   const { title, content, priority } = req.body;
-  const db = readDB();
+  const db = await readDB();
 
   const id = 'ann-' + Date.now();
   const newAnn = {
@@ -492,34 +420,34 @@ app.post('/api/announcements', authenticate, (req: any, res) => {
   };
 
   db.announcements.unshift(newAnn);
-  writeDB(db);
+  await writeDB(db);
 
   res.json({ success: true, announcement: newAnn });
 });
 
 // 11. Announcements: Delete (Warden only)
-app.delete('/api/announcements/:id', authenticate, (req: any, res) => {
+app.delete('/api/announcements/:id', authenticate, async (req: any, res) => {
   if (req.userPayload.role !== 'warden') {
     return res.status(403).json({ error: 'Permission denied.' });
   }
 
   const { id } = req.params;
-  const db = readDB();
+  const db = await readDB();
 
   db.announcements = db.announcements.filter(a => a.id !== id);
-  writeDB(db);
+  await writeDB(db);
 
   res.json({ success: true });
 });
 
 // 12. Rooms: Assign student to room (Warden only)
-app.post('/api/rooms/assign', authenticate, (req: any, res) => {
+app.post('/api/rooms/assign', authenticate, async (req: any, res) => {
   if (req.userPayload.role !== 'warden') {
     return res.status(403).json({ error: 'Permission denied.' });
   }
 
   const { studentId, block, roomNo } = req.body;
-  const db = readDB();
+  const db = await readDB();
 
   const student = db.users.find(u => u.id === studentId);
   if (!student) {
@@ -533,7 +461,7 @@ app.post('/api/rooms/assign', authenticate, (req: any, res) => {
   // Sync rooms stats
   syncRoomOccupancies(db);
 
-  writeDB(db);
+  await writeDB(db);
 
   sendSimulatedEmail(
     student.email,
@@ -545,13 +473,13 @@ app.post('/api/rooms/assign', authenticate, (req: any, res) => {
 });
 
 // 12.5. Rooms: Student chooses room
-app.post('/api/rooms/choose', authenticate, (req: any, res) => {
+app.post('/api/rooms/choose', authenticate, async (req: any, res) => {
   if (req.userPayload.role !== 'student') {
     return res.status(403).json({ error: 'Permission denied.' });
   }
 
   const { roomId } = req.body;
-  const db = readDB();
+  const db = await readDB();
 
   const room = db.rooms.find(r => r.id === roomId);
   if (!room) {
@@ -577,7 +505,7 @@ app.post('/api/rooms/choose', authenticate, (req: any, res) => {
   student.roomNo = room.roomNo;
 
   syncRoomOccupancies(db);
-  writeDB(db);
+  await writeDB(db);
 
   sendSimulatedEmail(
     student.email,
@@ -589,14 +517,14 @@ app.post('/api/rooms/choose', authenticate, (req: any, res) => {
 });
 
 // 13. Rooms: Update Room status (Warden only)
-app.patch('/api/rooms/:id', authenticate, (req: any, res) => {
+app.patch('/api/rooms/:id', authenticate, async (req: any, res) => {
   if (req.userPayload.role !== 'warden') {
     return res.status(403).json({ error: 'Permission denied.' });
   }
 
   const { id } = req.params;
   const { status } = req.body;
-  const db = readDB();
+  const db = await readDB();
 
   const room = db.rooms.find(r => r.id === id);
   if (!room) {
@@ -605,13 +533,13 @@ app.patch('/api/rooms/:id', authenticate, (req: any, res) => {
 
   room.status = status;
   syncRoomOccupancies(db);
-  writeDB(db);
+  await writeDB(db);
 
   res.json({ success: true, room });
 });
 
 // 14. Mess Menu: Update (Warden only)
-app.put('/api/mess', authenticate, (req: any, res) => {
+app.put('/api/mess', authenticate, async (req: any, res) => {
   if (req.userPayload.role !== 'warden') {
     return res.status(403).json({ error: 'Permission denied.' });
   }
@@ -621,9 +549,9 @@ app.put('/api/mess', authenticate, (req: any, res) => {
     return res.status(400).json({ error: 'Invalid food menu format.' });
   }
 
-  const db = readDB();
+  const db = await readDB();
   db.messMenu = menu;
-  writeDB(db);
+  await writeDB(db);
 
   res.json({ success: true });
 });
@@ -729,7 +657,7 @@ async function startServer() {
   }
 
   // Pre-load DB on boot
-  readDB();
+  await initDB();
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`VSB BH2 Server running on http://localhost:${PORT}`);
