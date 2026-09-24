@@ -8,4 +8,4 @@
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
-Deployed Link:https://hostel-management-system-2-3.onrender.com/
+Deployed Link:https://hostel-management-system-2-3.onrender.com/ 
